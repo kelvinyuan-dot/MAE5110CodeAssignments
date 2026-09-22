@@ -11,7 +11,7 @@ The RoA grid was determined by testing various inital conditions. For each condi
 
 # 3. Choice of Poincaré section
 
-The Poincaré section was chosen at (\theta=0) with positive angular velocity after a foot strike. This represents the walker passing through the upright position at each step, and provides a consistent point at which the state of the walker can be recorded from one step to the next.
+The Poincaré section was chosen at $\theta=0$ with positive angular velocity after a foot strike. This represents the walker passing through the upright position at each step, and provides a consistent point at which the state of the walker can be recorded from one step to the next.
 
 # 4. How you verified your grid resolution
 ![Grid Resolution](output/assignment_2/Grid Convergence.png)
@@ -30,7 +30,7 @@ As a result, the 41 by 41 grid was chosen. This choice was a good balance of acc
 # 5. Trajectory for an initial condition that requires at least 3 steps
 ![Grid Resolution](output/assignment_2/Min Max Trajectories.png)
 
-An initial angular velocity of approximately 3 rad/s was selected because this initial condition requires at least 3 steps to reach the RoA. Using the same initial condition, the walker could take a maximum of 5 steps before reaching the RoA, depending on the sequence of (\alpha) values chosen for the subsequent steps. These (\alpha) values represent the different foot-placements available to the walker.
+An initial angular velocity of approximately 3 rad/s was selected because this initial condition requires at least 3 steps to reach the RoA. Using the same initial condition, the walker could take a maximum of 5 steps before reaching the RoA, depending on the sequence of $\alpha=0$ values chosen for the subsequent steps. These $\alpha=0$ values represent the different foot-placements available to the walker.
 
 # 6. A visualization of how many steps
 ![Grid Resolution](output/assignment_2/Steps Required.png)
