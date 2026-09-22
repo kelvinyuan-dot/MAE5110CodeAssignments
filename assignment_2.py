@@ -8,6 +8,9 @@ from matplotlib.colors import ListedColormap
 from models import inverted_pendulum_walker as model
 from integrators import rk4
 
+output = Path("output/assignment_2")
+output.mkdir(parents=True, exist_ok=True)
+
 # Fixed controls for this visualization example.
 params = {
     "gravity": 9.81,  # m/s^2
@@ -209,6 +212,7 @@ plt.imshow(
 plt.xlabel("Theta (rad)")
 plt.ylabel("Angular velocity (rad/s)")
 plt.title("Region of Attraction of Ankle Controller")
+plt.savefig(output / "RoA.png", dpi=300, bbox_inches="tight")
 
 plt.show()
 
@@ -277,27 +281,6 @@ for i, angular_velocity in enumerate(poincare_velocity_values):
 
 print("Finished computing step-to-step lookup table.")
 
-# Plot the state-action lookup table
-plt.figure(figsize=(8, 5))
-
-plt.imshow(
-    return_map,
-    origin="lower",
-    aspect="auto",
-    extent=[
-        alpha_values[0],
-        alpha_values[-1],
-        poincare_velocity_values[0],
-        poincare_velocity_values[-1],
-    ],
-)
-
-plt.colorbar(label="Next angular velocity (rad/s)")
-plt.xlabel("Angle of attack alpha (rad)")
-plt.ylabel("Current angular velocity (rad/s)")
-plt.title("Step-to-Step State-Action Map")
-
-plt.show()
 
 # Test lookup-table grid resolution using nearest-neighbor error
 
@@ -383,9 +366,9 @@ plt.plot(
 )
 
 plt.axhline(
-    0.01,
+    0.05,
     linestyle="--",
-    label="0.01 rad/s tolerance",
+    label="0.05 rad/s tolerance",
 )
 
 plt.xlabel("Grid size")
@@ -394,12 +377,368 @@ plt.title("Lookup Table Grid Convergence")
 plt.legend()
 plt.grid()
 
+plt.savefig(output / "Grid Convergence.png", dpi=300, bbox_inches="tight")
 plt.show()
+
+# Select coarsest acceptable state-action grid
+
+
+tolerance = 0.05
+selected_grid_size = None
+
+for grid_size, error in zip(grid_sizes, mean_errors):
+    if error <= tolerance:
+        selected_grid_size = grid_size
+        break
+
+print("Selected grid size:", selected_grid_size)
+
+
+# Rebuild the lookup table using selected grid size
+
+poincare_velocity_values = np.linspace(
+    0.0,
+    max_velocity,
+    selected_grid_size,
+)
+
+alpha_values = np.linspace(
+    np.pi / 8,
+    np.pi / 7,
+    selected_grid_size,
+)
+
+return_map = compute_return_map(
+    poincare_velocity_values,
+    alpha_values,
+    params,
+)
+
+
+# Find Poincare states already inside standing-controller RoA
+
+
+standing_states = np.zeros(
+    len(poincare_velocity_values),
+    dtype=bool,
+)
+
+for i, angular_velocity in enumerate(poincare_velocity_values):
+
+    state = np.array([
+        0.0,
+        angular_velocity,
+    ])
+
+    standing_states[i] = roa_event_guard(
+        state,
+        theta_values,
+        velocity_values,
+        roa,
+    )
+
+
+# Backward search
+
+
+steps_to_stand = np.full(
+    len(poincare_velocity_values),
+    -1,
+    dtype=int,
+)
+
+best_action = np.full(
+    len(poincare_velocity_values),
+    np.nan,
+)
+
+# 0 means already inside standing-controller RoA
+steps_to_stand[standing_states] = 0
+
+max_steps = 20
+
+for step_count in range(1, max_steps + 1):
+
+    found_new_state = False
+
+    for i in range(len(poincare_velocity_values)):
+
+        # Already know how to stabilize this state
+        if steps_to_stand[i] != -1:
+            continue
+
+        for j in range(len(alpha_values)):
+
+            next_velocity = return_map[i, j]
+
+            if np.isnan(next_velocity):
+                continue
+
+            # Find closest state on our velocity grid
+            next_i = np.argmin(
+                np.abs(
+                    poincare_velocity_values
+                    - next_velocity
+                )
+            )
+
+            # Does this action move us one step closer?
+            if steps_to_stand[next_i] == step_count - 1:
+
+                steps_to_stand[i] = step_count
+                best_action[i] = alpha_values[j]
+
+                found_new_state = True
+                break
+
+    if not found_new_state:
+        break
+
+for i in range(len(poincare_velocity_values)):
+
+    if steps_to_stand[i] == -1:
+
+        print(
+            "Unreachable velocity:",
+            poincare_velocity_values[i]
+        )
+
+        print(
+            "Next velocities:",
+            return_map[i, :]
+        )
+
+# Compare minimum-step and maximum-step trajectories
+
+
+# Pick an initial condition that requires at least 3 steps
+initial_velocity = 3.0
+
+initial_index = np.argmin(
+    np.abs(poincare_velocity_values - initial_velocity)
+)
+
+print(
+    "Initial velocity:",
+    poincare_velocity_values[initial_index],
+)
+
+print(
+    "Minimum steps to RoA:",
+    steps_to_stand[initial_index],
+)
+
+
+# Find longest paths that still eventually reach the RoA
+
+
+max_steps_before_roa = np.full(
+    len(poincare_velocity_values),
+    -1,
+    dtype=int,
+)
+
+max_action = np.full(
+    len(poincare_velocity_values),
+    np.nan,
+)
+
+# States already in the RoA need zero steps
+max_steps_before_roa[standing_states] = 0
+
+# Search for longer paths
+for iteration in range(100):
+
+    changed = False
+
+    for i in range(len(poincare_velocity_values)):
+
+        # Skip states already in the RoA
+        if standing_states[i]:
+            continue
+
+        for j in range(len(alpha_values)):
+
+            next_velocity = return_map[i, j]
+
+            if np.isnan(next_velocity):
+                continue
+
+            # Find nearest velocity grid point
+            next_i = np.argmin(
+                np.abs(
+                    poincare_velocity_values
+                    - next_velocity
+                )
+            )
+
+            # Next state must already have a known path to RoA
+            if max_steps_before_roa[next_i] >= 0:
+
+                candidate_steps = (
+                    1 + max_steps_before_roa[next_i]
+                )
+
+                if (
+                    candidate_steps
+                    > max_steps_before_roa[i]
+                ):
+
+                    max_steps_before_roa[i] = (
+                        candidate_steps
+                    )
+
+                    max_action[i] = alpha_values[j]
+
+                    changed = True
+
+    if not changed:
+        break
+
+
+print(
+    "Maximum steps to RoA:",
+    max_steps_before_roa[initial_index],
+)
+
+# Minimum-step trajectory
+
+
+min_trajectory = [
+    poincare_velocity_values[initial_index]
+]
+
+current_i = initial_index
+
+while steps_to_stand[current_i] > 0:
+
+    alpha = best_action[current_i]
+
+    j = np.argmin(
+        np.abs(alpha_values - alpha)
+    )
+
+    next_velocity = return_map[current_i, j]
+
+    current_i = np.argmin(
+        np.abs(
+            poincare_velocity_values
+            - next_velocity
+        )
+    )
+
+    min_trajectory.append(
+        poincare_velocity_values[current_i]
+    )
+
+
+# Maximum-step trajectory
+
+
+max_trajectory = [
+    poincare_velocity_values[initial_index]
+]
+
+current_i = initial_index
+
+for _ in range(100):
+
+    # Stop when RoA is reached
+    if standing_states[current_i]:
+        break
+
+    alpha = max_action[current_i]
+
+    if np.isnan(alpha):
+        break
+
+    j = np.argmin(
+        np.abs(alpha_values - alpha)
+    )
+
+    next_velocity = return_map[current_i, j]
+
+    current_i = np.argmin(
+        np.abs(
+            poincare_velocity_values
+            - next_velocity
+        )
+    )
+
+    max_trajectory.append(
+        poincare_velocity_values[current_i]
+    )
+
+
+# Plot minimum and maximum-step trajectories
+
+
+plt.figure(figsize=(8, 5))
+
+plt.plot(
+    range(len(min_trajectory)),
+    min_trajectory,
+    "o-",
+    label="Minimum-step trajectory",
+)
+
+plt.plot(
+    range(len(max_trajectory)),
+    max_trajectory,
+    "o-",
+    label="Maximum-step trajectory",
+)
+
+plt.xlabel("Step number")
+plt.ylabel("Angular velocity (rad/s)")
+
+plt.title(
+    "Minimum and Maximum-Step Trajectories"
+)
+
+plt.legend()
+plt.grid()
+
+plt.savefig(output / "Min Max Trajectories.png", dpi=300, bbox_inches="tight")
+plt.show()
+
+# Plot number of footsteps required to reach standing
+
+reachable = steps_to_stand >= 0
+unreachable = steps_to_stand == -1
+
+plt.figure(figsize=(8, 5))
+
+plt.scatter(
+    poincare_velocity_values[reachable],
+    steps_to_stand[reachable],
+    label="Reachable",
+)
+
+plt.scatter(
+    poincare_velocity_values[unreachable],
+    np.zeros(np.sum(unreachable)),
+    marker="x",
+    s=100,
+    label="No valid step found",
+)
+
+plt.xlabel("Angular velocity (rad/s)")
+plt.ylabel("Steps to standing")
+plt.title("Steps Required to Reach Standing Controller RoA")
+plt.legend()
+plt.grid()
+
+plt.savefig(output / "Steps Required.png", dpi=300, bbox_inches="tight")
+plt.show()
+
+# Walker simulation / animation
 
 initial_state = np.array([0.0, 3.0])
 timestep = 1e-4
 sim_time = 3.0
 desired_number_of_steps = 3
+
 
 n_timesteps = round(sim_time / timestep) + 1
 time_traj = np.arange(n_timesteps) * timestep
@@ -407,27 +746,58 @@ state_traj = np.zeros((2, n_timesteps))
 state_traj[:, 0] = initial_state
 completed_steps = 0
 
-# Simulation loop. Replaced with RK4 integration.
+# Simulation loop
 reached_roa = False
+impact_occurred = False
+
+# Choose the first foot-placement action
+initial_velocity = initial_state[1]
+
+velocity_index = np.argmin(
+    np.abs(poincare_velocity_values - initial_velocity)
+)
+
+if steps_to_stand[velocity_index] != -1:
+    params["angle_of_attack"] = best_action[velocity_index]
+else:
+    print("Initial velocity is unreachable.")
 
 for step, t in enumerate(time_traj[:-1]):
+
     state = state_traj[:, step]
 
-    # Check if the current state has entered the ankle controller RoA
-    if roa_event_guard(
-        state,
-        theta_values,
-        velocity_values,
-        roa,
-    ):
-        print("Reached ankle controller RoA!")
-        reached_roa = True
-        break
+    # Check if walker has entered the RoA
+    if not reached_roa:
 
-    # Outside the RoA, leave the ankle controller off
-    params["ankle_torque"] = 0.0
+        if roa_event_guard(
+            state,
+            theta_values,
+            velocity_values,
+            roa,
+        ):
+            reached_roa = True
 
-    # Advance one timestep using RK4
+            print(
+                f"Entered RoA at t = {t:.3f} s, "
+                f"theta = {state[0]:.3f}, "
+                f"velocity = {state[1]:.3f}"
+            )
+
+    # Ankle controller stays on after entering RoA
+    if reached_roa:
+
+        params["ankle_torque"] = ankle_controller(
+            state,
+            params,
+            kp,
+            kd,
+        )
+
+    else:
+
+        params["ankle_torque"] = 0.0
+
+    # Integrate one timestep
     next_state = rk4_step(
         t,
         state,
@@ -436,19 +806,57 @@ for step, t in enumerate(time_traj[:-1]):
         params,
     )
 
-    # Check for foot strike
-    if model.event_guard(state, next_state, params):
+    # Detect foot strike
+    if (
+        not reached_roa
+        and model.event_guard(state, next_state, params)
+    ):
+
         next_state = model.event_dynamics(
             next_state,
             params,
         )
-        completed_steps += 1
 
+        completed_steps += 1
+        impact_occurred = True
+
+    # Detect return to Poincare section
+    elif (
+        not reached_roa
+        and impact_occurred
+        and state[0] < 0 <= next_state[0]
+        and next_state[1] > 0
+    ):
+
+        current_velocity = next_state[1]
+
+        velocity_index = np.argmin(
+            np.abs(
+                poincare_velocity_values
+                - current_velocity
+            )
+        )
+
+        if steps_to_stand[velocity_index] > 0:
+
+            params["angle_of_attack"] = (
+                best_action[velocity_index]
+            )
+
+            print(
+                f"Velocity = {current_velocity:.3f}, "
+                f"alpha = {params['angle_of_attack']:.3f}, "
+                f"steps remaining = "
+                f"{steps_to_stand[velocity_index]}"
+            )
+
+        impact_occurred = False
+
+    # IMPORTANT: store next state every timestep
     state_traj[:, step + 1] = next_state
 
-    if completed_steps == desired_number_of_steps:
-        break
 
+# These stay OUTSIDE the for loop
 time_traj = time_traj[: step + 2]
 state_traj = state_traj[:, : step + 2]
 
@@ -471,8 +879,7 @@ if frame_indices[-1] != time_traj.size - 1:
 animation = FuncAnimation(
     fig, draw_frame, frames=frame_indices, interval=1000 / fps, repeat=False
 )
-output = Path("output/assignment_2")
-output.mkdir(parents=True, exist_ok=True)
+
 animation.save(output / "walker.gif", writer=PillowWriter(fps=fps))
 
 # To save an MP4 instead, install FFmpeg and use:
