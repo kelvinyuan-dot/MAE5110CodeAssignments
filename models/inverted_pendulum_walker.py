@@ -7,6 +7,9 @@ of those functions; it draws a supplied state without advancing the simulation.
 import matplotlib.pyplot as plt
 import numpy as np
 
+def generate_initial_condition():
+    """Return the walker initially upright and at rest."""
+    return np.array([0.0, 0.0])
 
 def generate_params():
     return {
@@ -56,6 +59,18 @@ def event_dynamics(state, params):
     )
 
     return np.array([new_theta, new_angular_velocity])
+
+def event_transverse_guard(state, next_state, params):
+    theta = state[0]
+    next_theta = next_state[0]
+    next_omega = next_state[1]
+
+    return (
+        theta < 0.0
+        and next_theta >= 0.0
+        and next_omega > 0.0
+    )
+
 
 
 def calculate_energy(state, params):
